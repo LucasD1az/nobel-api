@@ -1,0 +1,15 @@
+# Ignorar datos locales descargados
+/data/
+
+# Cachés de Python
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Entornos virtuales (por si más adelante usás uno)
+/venv/
+/.venv/
+
+# Archivos de editor/IDE
+.vscode/
+.idea/
