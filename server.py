@@ -97,12 +97,12 @@ def on_startup():
 def read_root():
     """
     Endpoint mínimo para verificar que el servidor está vivo.
-    Más adelante agregamos los endpoints posta (/laureates, /stats, etc.).
     """
     return {
         "message": "Servidor Nobel Laureates API OK",
         "data_file_exists": LAUREATES_FILE.exists(),
         "data_file": str(LAUREATES_FILE),
+        "laureates_loaded": len(LAUREATES_DATA),
     }
 
 # =========================
