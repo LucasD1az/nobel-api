@@ -137,3 +137,86 @@ Todas las disciplinas solo en 2004:
 ```text
 GET /laureates?year=2004
 ```
+
+### `GET /countries`
+
+Devuelve la cantidad de laureados por país, con filtros opcionales.
+
+#### Parámetros:
+* `discipline` (opcional, string):  
+Nombre de la disciplina en inglés (`category.en`), por ejemplo:
+  * "Physics"
+  * "Chemistry"
+  * "Peace"
+
+Si se omite, se incluyen **todas** las disciplinas.
+
+* `year` (opcional, int):  
+Año inicial o año único.
+
+* `yearto` (opcional, int):  
+Año final.
+
+#### Lógica de filtrado por años:
+- `year` y `yearto` presentes: premios entre `year` y `yearto` (inclusive).  
+- Solo `year`: premios en ese año.  
+- Solo `yearto`: premios hasta `yearto` (desde el primer año disponible).  
+- Ninguno de los dos: todos los años.
+
+El país se toma del lugar de nacimiento del laureado: `birth.place.country.en` (si está disponible).  
+Si no se encuentra, se usa `"Unknown"`.
+
+#### Formato de respuesta
+```json
+{
+  "discipline": "Physics",
+  "year": 1970,
+  "yearto": 1972,
+  "total_count": 6,
+  "results": [
+    {
+      "country": "USA",
+      "count": 3
+    },
+    {
+      "country": "Hungary",
+      "count": 1
+    },
+    {
+      "country": "Sweden",
+      "count": 1
+    },
+    {
+      "country": "France",
+      "count": 1
+    }
+  ]
+}
+```
+
+#### Ejemplos de uso
+
+Todas las disciplinas, todos los años:
+```text
+GET /countries
+```
+
+Solo Física, todos los años:
+```text
+GET /countries?discipline=Physics
+```
+
+Química solo en 2004:
+```text
+GET /countries?discipline=Chemistry&year=2004
+```
+
+Todas las disciplinas hasta 1950:
+```text
+GET /countries?yearto=1950
+```
+
+Física entre 1970 y 1980:
+```text
+GET /countries?discipline=Physics&year=1970&yearto=1980
+```
