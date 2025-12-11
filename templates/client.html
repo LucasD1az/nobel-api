@@ -256,28 +256,44 @@
           </table>
         {% endfor %}
 
-      {% elif endpoint_type == "countries" %}
+        {% elif endpoint_type == "countries" %}
+        {% if api_full_url %}
+            {# cambiamos /countries por /countries-map manteniendo los mismos parámetros #}
+            {% set map_url = api_full_url.replace('/countries', '/countries-map') %}
+            <h3>Mapa mundial</h3>
+            <p class="muted">
+            Mapa generado por el servidor a partir de los mismos filtros usados en /countries.
+            </p>
+            <img
+            src="{{ map_url }}"
+            alt="Mapa de premios Nobel por país"
+            style="max-width: 100%; margin-top: 8px; border-radius: 6px; border: 1px solid #e5e7eb;"
+            >
+        {% endif %}
         <h3>Laureados por país</h3>
         <p class="muted">
-          Total de entradas (sumando todos los países): {{ data.get("total_count", 0) }}
+            Total de entradas (sumando todos los países): {{ data.get("total_count", 0) }}
         </p>
         <table>
-          <thead>
+            <thead>
             <tr>
-              <th>País (en)</th>
-              <th>Cantidad de laureados</th>
+                <th>País (en)</th>
+                <th>Cantidad de laureados</th>
             </tr>
-          </thead>
-          <tbody>
+            </thead>
+            <tbody>
             {% for item in data.get("results", []) %}
-              <tr>
+                <tr>
                 <td>{{ item.country }}</td>
                 <td>{{ item.count }}</td>
-              </tr>
+                </tr>
             {% endfor %}
-          </tbody>
+            </tbody>
         </table>
-      {% endif %}
+
+        
+        {% endif %}
+
 
       <h3>Respuesta cruda (JSON)</h3>
       <pre>{{ data | tojson(indent=2) }}</pre>

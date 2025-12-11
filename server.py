@@ -5,6 +5,15 @@ import json
 from pathlib import Path
 from typing import Optional, List, Dict
 
+import io
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import geopandas as gpd
+from matplotlib import colors
+from fastapi.responses import StreamingResponse
+from fastapi import HTTPException
+
 # =========================
 # Configuración de paths y URL
 # =========================
@@ -14,6 +23,24 @@ DATA_DIR = BASE_DIR / "data"
 LAUREATES_FILE = DATA_DIR / "laureates.json"
 
 NOBEL_API_URL = "https://api.nobelprize.org/2.1/laureates?offset=0&limit=1025"
+
+# Mapeo manual de nombres de países del JSON de Nobel a Natural Earth
+COUNTRY_NAME_MAPPING = {
+    "USA": "United States of America",
+    "the Netherlands": "Netherlands",
+    "Russian Empire": "Russia",
+    "Prussia": "Germany",
+    "Russian Federation": "Russia",
+    "Austria-Hungary": "Austria", 
+    "Scotland": "United Kingdom", 
+    "USSR": "Russia",
+    "British Mandate of Palestine": "Palestine",
+    "Northern Ireland": "United Kingdom",
+    "West Germany": "Germany",
+    "Austrian Empire": "Austria",
+    "French Algeria": "Algeria",
+    "East Timor": "Timor-Leste",
+}
 
 app = FastAPI(title="Nobel Laureates API - Etapa init")
 
@@ -77,6 +104,77 @@ def load_laureates_into_memory() -> None:
     LAUREATES_DATA = data.get("laureates", [])
     print(f"[load_laureates] Cargados {len(LAUREATES_DATA)} laureados en memoria.")
 
+def compute_country_counts(
+    discipline: Optional[str] = None,
+    year: Optional[int] = None,
+    yearto: Optional[int] = None,
+) -> Dict[str, int]:
+    """
+    Devuelve un diccionario {country_name_en: count} usando la misma lógica
+    de filtros que /countries.
+    """
+    discipline_lower = discipline.lower() if discipline is not None else None
+
+    country_counts: Dict[str, int] = {}
+
+    for laureate in LAUREATES_DATA:
+        # --- Obtener país en inglés del nacimiento ---
+        country_name_en = None
+        birth = laureate.get("birth")
+        if isinstance(birth, dict):
+            place = birth.get("place")
+            if isinstance(place, dict):
+                country = place.get("country")
+                # country puede ser dict {"en": "..."} o string
+                if isinstance(country, dict):
+                    country_name_en = country.get("en")
+                elif isinstance(country, str):
+                    country_name_en = country
+
+        if not country_name_en:
+            country_name_en = "Unknown"
+
+        # --- Iterar los premios Nobel de esta persona ---
+        nobel_prizes = laureate.get("nobelPrizes", [])
+        for prize in nobel_prizes:
+            # Filtrar por disciplina si corresponde
+            if discipline_lower is not None:
+                cat = prize.get("category")
+                if isinstance(cat, dict):
+                    cat_en = cat.get("en")
+                else:
+                    cat_en = cat
+                if not cat_en or cat_en.lower() != discipline_lower:
+                    continue
+
+            # Año del premio
+            award_year_str = prize.get("awardYear")
+            try:
+                award_year = int(award_year_str) if award_year_str is not None else None
+            except ValueError:
+                continue
+
+            if award_year is None:
+                continue
+
+            # Lógica de rango de años
+            in_range = False
+            if year is not None and yearto is not None:
+                in_range = year <= award_year <= yearto
+            elif year is not None and yearto is None:
+                in_range = (award_year == year)
+            elif year is None and yearto is not None:
+                in_range = (award_year <= yearto)
+            else:
+                in_range = True
+
+            if not in_range:
+                continue
+
+            # Contabilizar el laureado para ese país
+            country_counts[country_name_en] = country_counts.get(country_name_en, 0) + 1
+
+    return country_counts
 
 @app.on_event("startup")
 def on_startup():
@@ -257,95 +355,12 @@ def get_countries(
     yearto: Optional[int] = None,
 ):
     """
-    Devuelve la cantidad de laureados por país, con filtros opcionales:
-
-    - discipline (opcional): si se especifica, filtra por categoría (category.en),
-      ej. "Physics", "Chemistry", "Economic Sciences".
-    - year y yearto (opcionales):
-        * ambos presentes  -> premios entre year y yearto (inclusive)
-        * solo year        -> premios en ese año
-        * solo yearto      -> premios hasta yearto (desde el primer año disponible)
-        * ninguno          -> todos los años
-
-    El país se toma del lugar de nacimiento: birth.place.country.en (si está disponible).
-    Si no se encuentra, se usa "Unknown".
-
-    Respuesta ejemplo:
-    {
-      "discipline": "Physics",
-      "year": 1970,
-      "yearto": 1980,
-      "total_count": 42,
-      "results": [
-        {"country": "USA", "count": 20},
-        {"country": "United Kingdom", "count": 5},
-        ...
-      ]
-    }
+    Devuelve la cantidad de laureados por país, con filtros opcionales.
+    (Misma lógica que ya tenías, ahora apoyada en compute_country_counts).
     """
 
-    discipline_lower = discipline.lower() if discipline is not None else None
-
-    country_counts: Dict[str, int] = {}
-    total_count = 0
-
-    for laureate in LAUREATES_DATA:
-        # --- Obtener país en inglés del nacimiento ---
-        country_name_en = None
-        birth = laureate.get("birth")
-        if isinstance(birth, dict):
-            place = birth.get("place")
-            if isinstance(place, dict):
-                country = place.get("country")
-                # country puede ser dict {"en": "..."} o string
-                if isinstance(country, dict):
-                    country_name_en = country.get("en")
-                elif isinstance(country, str):
-                    country_name_en = country
-
-        if not country_name_en:
-            country_name_en = "Unknown"
-
-        # --- Iterar los premios Nobel de esta persona ---
-        nobel_prizes = laureate.get("nobelPrizes", [])
-        for prize in nobel_prizes:
-            # Filtrar por disciplina si corresponde
-            if discipline_lower is not None:
-                cat = prize.get("category")
-                if isinstance(cat, dict):
-                    cat_en = cat.get("en")
-                else:
-                    cat_en = cat
-                if not cat_en or cat_en.lower() != discipline_lower:
-                    continue
-
-            # Año del premio
-            award_year_str = prize.get("awardYear")
-            try:
-                award_year = int(award_year_str) if award_year_str is not None else None
-            except ValueError:
-                continue
-
-            if award_year is None:
-                continue
-
-            # Lógica de rango de años
-            in_range = False
-            if year is not None and yearto is not None:
-                in_range = year <= award_year <= yearto
-            elif year is not None and yearto is None:
-                in_range = (award_year == year)
-            elif year is None and yearto is not None:
-                in_range = (award_year <= yearto)
-            else:
-                in_range = True
-
-            if not in_range:
-                continue
-
-            # Contabilizar el laureado para ese país
-            country_counts[country_name_en] = country_counts.get(country_name_en, 0) + 1
-            total_count += 1
+    country_counts = compute_country_counts(discipline, year, yearto)
+    total_count = sum(country_counts.values())
 
     # Ordenar por cantidad descendente
     sorted_items = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)
@@ -362,3 +377,100 @@ def get_countries(
         "total_count": total_count,
         "results": results_list,
     }
+
+
+@app.get("/countries-map")
+def get_countries_map(
+    discipline: Optional[str] = None,
+    year: Optional[int] = None,
+    yearto: Optional[int] = None,
+):
+    """
+    Devuelve un mapa mundial (choropleth) en formato PNG, coloreando los países
+    según la cantidad de laureados, usando la misma lógica de filtros que /countries.
+
+    - La escala de colores es logarítmica (para distinguir bien países con pocos Nobel).
+    - Países con 0 laureados se muestran en gris.
+    """
+
+    country_counts = compute_country_counts(discipline, year, yearto)
+
+    if not country_counts:
+        raise HTTPException(status_code=404, detail="No hay datos para esos filtros")
+
+    # Pasamos counts a DataFrame
+    df_counts = pd.DataFrame(
+        [{"country": c, "count": n} for c, n in country_counts.items()]
+    )
+
+    # Normalizamos nombres de países según el mapping
+    df_counts["country_normalized"] = df_counts["country"].apply(
+        lambda c: COUNTRY_NAME_MAPPING.get(c, c)
+    )
+
+    # Cargamos mapa mundial desde el dataset de GeoPandas
+    # (esto te funciona porque hiciste downgrade de versión)
+    world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+
+    # Hacemos merge por nombre
+    merged = world.merge(
+        df_counts,
+        how="left",
+        left_on="name",
+        right_on="country_normalized",
+    )
+
+    # 'count' puede tener NaN (no hay Nobel) → los convertimos a 0 para stats
+    merged["count"] = merged["count"].fillna(0)
+
+    # Columna para ploteo: los 0 los ponemos como NaN para que se dibujen con el color de "missing"
+    merged["count_plot"] = merged["count"].replace(0, np.nan)
+
+    # Definimos normalizador logarítmico solo si hay algún valor > 0
+    max_count = merged["count"].max()
+    if max_count <= 0:
+        # Caso borde: todo es 0 (muy raro, pero por las dudas)
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudieron calcular valores positivos para el mapa.",
+        )
+
+    norm = colors.LogNorm(vmin=1, vmax=max_count)
+
+    # Dibujamos el mapa
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    merged.plot(
+        column="count_plot",
+        ax=ax,
+        legend=True,
+        cmap="OrRd",
+        norm=norm,
+        linewidth=0.4,
+        edgecolor="black",
+        missing_kwds={  # para geometrías donde count_plot es NaN
+            "color": "lightgrey",
+            "edgecolor": "black",
+            "hatch": "///",
+        },
+    )
+    ax.set_axis_off()
+
+    # Título prolijo
+    title_parts = ["Premios Nobel por país"]
+    if discipline:
+        title_parts.append(f"– {discipline}")
+    if year and yearto:
+        title_parts.append(f"({year}–{yearto})")
+    elif year and not yearto:
+        title_parts.append(f"({year})")
+    elif yearto and not year:
+        title_parts.append(f"(hasta {yearto})")
+    ax.set_title(" ".join(title_parts))
+
+    buf = io.BytesIO()
+    fig.tight_layout()
+    fig.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+
+    return StreamingResponse(buf, media_type="image/png")

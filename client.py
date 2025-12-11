@@ -38,11 +38,14 @@ async def index(request: Request):
             "endpoint_type": None,
             "query_params": {},
             "api_url": None,
+            "api_full_url": None,
+            "api_server_base": API_SERVER_BASE_URL,
             "status_code": None,
             "error": None,
             "data": None,
         },
     )
+
 
 
 # =========================
@@ -93,10 +96,13 @@ async def query_api(
     status_code = None
     data = None
     error = None
+    api_full_url = None
 
     try:
         resp = requests.get(api_url, params=params, timeout=10)
         status_code = resp.status_code
+        api_full_url = str(resp.url) 
+
         if resp.headers.get("content-type", "").startswith("application/json"):
             data = resp.json()
         else:
@@ -113,6 +119,8 @@ async def query_api(
             "endpoint_type": endpoint_type,
             "query_params": params,
             "api_url": api_url,
+            "api_full_url": api_full_url,
+            "api_server_base": API_SERVER_BASE_URL,
             "status_code": status_code,
             "error": error,
             "data": data,
