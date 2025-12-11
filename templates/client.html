@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Nobel API Client</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 20px;
+      background: #f5f5f5;
+    }
+
+    h1 {
+      margin-bottom: 0.2rem;
+    }
+
+    .card {
+      background: #ffffff;
+      padding: 16px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+    }
+
+    label {
+      display: block;
+      margin-top: 8px;
+      font-weight: 600;
+    }
+
+    select, input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 6px 8px;
+      margin-top: 4px;
+      box-sizing: border-box;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+
+    button {
+      margin-top: 12px;
+      padding: 8px 16px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: white;
+      font-weight: 600;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    .small {
+      font-size: 0.9rem;
+      color: #555;
+    }
+
+    pre {
+      background: #111827;
+      color: #e5e7eb;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+    }
+
+    .error {
+      color: #b91c1c;
+      font-weight: 600;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+
+    th, td {
+      border: 1px solid #e5e7eb;
+      padding: 6px 8px;
+      font-size: 0.9rem;
+    }
+
+    th {
+      background: #f3f4f6;
+      text-align: left;
+    }
+
+    .section-title {
+      margin-top: 0;
+    }
+
+    .muted {
+      color: #6b7280;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Nobel API Client</h1>
+  <p class="small">Cliente web en FastAPI que consume el servidor de Premios Nobel.</p>
+
+  <div class="card">
+    <h2 class="section-title">Consulta</h2>
+    <form action="/query" method="post">
+      <!-- Menú: tipo de consulta -->
+      <label for="endpoint_type">Tipo de consulta</label>
+      <select id="endpoint_type" name="endpoint_type" required>
+        <option value="laureates" {% if endpoint_type == "laureates" or endpoint_type is none %}selected{% endif %}>
+          Laureados por año y disciplina (/laureates)
+        </option>
+        <option value="countries" {% if endpoint_type == "countries" %}selected{% endif %}>
+          Laureados por país (/countries)
+        </option>
+      </select>
+
+      <!-- Parámetros opcionales -->
+      <p class="muted">
+        Los parámetros son opcionales. Si los dejás vacíos, se usan todos los años / disciplinas.
+      </p>
+
+<label for="discipline">Disciplina (opcional)</label>
+<select id="discipline" name="discipline">
+  <!-- Opción vacía = todas las disciplinas -->
+  <option value=""
+    {% if not query_params or not query_params.get('discipline') %}
+      selected
+    {% endif %}
+  >
+    (Todas las disciplinas)
+  </option>
+
+  <option value="Physics"
+    {% if query_params and query_params.get('discipline') == "Physics" %}
+      selected
+    {% endif %}
+  >
+    Physics
+  </option>
+
+  <option value="Chemistry"
+    {% if query_params and query_params.get('discipline') == "Chemistry" %}
+      selected
+    {% endif %}
+  >
+    Chemistry
+  </option>
+
+  <option value="Peace"
+    {% if query_params and query_params.get('discipline') == "Peace" %}
+      selected
+    {% endif %}
+  >
+    Peace
+  </option>
+
+  <option value="Physiology or Medicine"
+    {% if query_params and query_params.get('discipline') == "Physiology or Medicine" %}
+      selected
+    {% endif %}
+  >
+    Physiology or Medicine
+  </option>
+
+  <option value="Economic Sciences"
+    {% if query_params and query_params.get('discipline') == "Economic Sciences" %}
+      selected
+    {% endif %}
+  >
+    Economic Sciences
+  </option>
+
+  <option value="Literature"
+    {% if query_params and query_params.get('discipline') == "Literature" %}
+      selected
+    {% endif %}
+  >
+    Literature
+  </option>
+</select>
+
+
+      <label for="year">Año inicial (year, opcional)</label>
+      <input
+        type="number"
+        id="year"
+        name="year"
+        placeholder="Ej: 1970"
+        value="{{ query_params.get('year', '') if query_params else '' }}"
+      />
+
+      <label for="yearto">Año final (yearto, opcional)</label>
+      <input
+        type="number"
+        id="yearto"
+        name="yearto"
+        placeholder="Ej: 1980"
+        value="{{ query_params.get('yearto', '') if query_params else '' }}"
+      />
+
+      <button type="submit">Enviar consulta</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Resultado</h2>
+
+    {% if api_url %}
+      <p class="small">
+        <strong>URL llamada:</strong>
+        {{ api_url }}
+        {% if query_params %}
+          ?{{ query_params | tojson | replace("{", "") | replace("}", "") }}
+        {% endif %}
+      </p>
+    {% endif %}
+
+    {% if status_code is not none %}
+      <p class="small"><strong>Status code:</strong> {{ status_code }}</p>
+    {% endif %}
+
+    {% if error %}
+      <p class="error">{{ error }}</p>
+    {% endif %}
+
+    {% if data %}
+      {% if endpoint_type == "laureates" %}
+        <h3>Laureados por año y disciplina</h3>
+        <p class="muted">
+          Total de entradas (sumando todas las disciplinas y años): {{ data.get("total_count", 0) }}
+        </p>
+
+        {% for year_block in data.get("results", []) %}
+          <h4>Año {{ year_block.awardYear }}</h4>
+          <table>
+            <thead>
+              <tr>
+                <th>Disciplina</th>
+                <th>Cantidad</th>
+                <th>Laureados</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for disc in year_block.disciplines %}
+                <tr>
+                  <td>{{ disc.discipline }}</td>
+                  <td>{{ disc.count }}</td>
+                  <td>
+                    {{ ", ".join(disc.laureates) }}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endfor %}
+
+      {% elif endpoint_type == "countries" %}
+        <h3>Laureados por país</h3>
+        <p class="muted">
+          Total de entradas (sumando todos los países): {{ data.get("total_count", 0) }}
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>País (en)</th>
+              <th>Cantidad de laureados</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in data.get("results", []) %}
+              <tr>
+                <td>{{ item.country }}</td>
+                <td>{{ item.count }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      <h3>Respuesta cruda (JSON)</h3>
+      <pre>{{ data | tojson(indent=2) }}</pre>
+    {% else %}
+      <p class="muted">Todavía no se hizo ninguna consulta, o no hay datos que mostrar.</p>
+    {% endif %}
+  </div>
+</body>
+</html>
