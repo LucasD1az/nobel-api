@@ -50,13 +50,95 @@ LAUREATES_DATA: List[Dict] = []
 # Función init_data
 # =========================
 
+def get_en(d, default=None):
+    """
+    Helper: si d es un dict con clave 'en', devuelve d['en'].
+    Si es string, lo devuelve tal cual. Si no, default.
+    """
+    if isinstance(d, dict):
+        return d.get("en") or default
+    if isinstance(d, str):
+        return d
+    return default
+
+def simplify_laureate(raw: dict) -> dict:
+    """
+    Toma un laureado en el formato COMPLEJO de la API Nobel
+    y devuelve un dict con solo los campos que nos interesan.
+
+    Soporta tanto:
+    - Personas (fullName / knownName + birth)
+    - Organizaciones (orgName + founded) -> usamos founded como si fuera birth
+    """
+
+    # --- ID ---
+    lid = str(raw.get("id"))
+
+    # --- Nombre completo ---
+    # Orden de prioridad:
+    #  1) fullName.en
+    #  2) knownName.en
+    #  3) orgName.en  (organizaciones)
+    #  4) nativeName  (organizaciones, fallback)
+    #  5) "Nombre desconocido"
+    full_name = get_en(raw.get("fullName"))
+    if not full_name:
+        full_name = get_en(raw.get("knownName"))
+    if not full_name:
+        full_name = get_en(raw.get("orgName"))
+    if not full_name:
+        full_name = raw.get("nativeName") or "Nombre desconocido"
+
+    # --- Género (para orgs suele faltar, dejamos 'unknown' por defecto) ---
+    gender = raw.get("gender", "unknown")
+
+    # --- Nacimiento / Fundación ---
+    # Personas: field "birth"
+    # Organizaciones: field "founded"
+    birth_or_founded = raw.get("birth") or raw.get("founded") or {}
+    birth_date = birth_or_founded.get("date")
+
+    place = birth_or_founded.get("place") or {}
+    birth_city = get_en(place.get("city"))
+    birth_country = get_en(place.get("country"))
+
+    # --- Premios Nobel (lista simplificada) ---
+    prizes_out = []
+    for prize in raw.get("nobelPrizes", []):
+        # awardYear -> int (si se puede)
+        award_year_raw = prize.get("awardYear")
+        try:
+            award_year = int(award_year_raw) if award_year_raw is not None else None
+        except ValueError:
+            award_year = None
+
+        category = get_en(prize.get("category"))
+        motivation = get_en(prize.get("motivation"))
+
+        prizes_out.append(
+            {
+                "awardYear": award_year,
+                "category": category,
+                "motivation": motivation,
+            }
+        )
+
+    return {
+        "id": lid,
+        "fullName": full_name,
+        "gender": gender,
+        "birthDate": birth_date,      # para orgs: fecha de fundación
+        "birthCity": birth_city,      # para orgs: ciudad de fundación
+        "birthCountry": birth_country,  # para orgs: país de fundación
+        "nobelPrizes": prizes_out,
+    }
+
 def init_data() -> None:
     """
     Se asegura de que exista data/laureates.json.
     - Si el archivo ya existe, NO lo toca.
-    - Si no existe, lo descarga desde la API de Nobel y lo guarda.
+    - Si no existe, lo descarga desde la API de Nobel, lo simplifica y lo guarda.
     """
-    # Nos aseguramos de que exista la carpeta data/
     DATA_DIR.mkdir(exist_ok=True)
 
     if LAUREATES_FILE.exists():
@@ -66,25 +148,33 @@ def init_data() -> None:
     print(f"[Inicializando] No se encontró {LAUREATES_FILE}. Descargando desde la API...")
     try:
         resp = requests.get(NOBEL_API_URL, timeout=30)
-        resp.raise_for_status()  # lanza error si status_code no es 2xx
+        resp.raise_for_status()
     except requests.RequestException as e:
-        # Si falla, lo mostramos en consola y dejamos que el server arranque igual
         print(f"[Inicializando] Error al descargar datos de Nobel: {e}")
         return
 
-    data = resp.json()
+    raw_data = resp.json()
+    raw_laureates = raw_data.get("laureates", [])
+
+    simplified_laureates = [simplify_laureate(l) for l in raw_laureates]
+
+    data_to_save = {"laureates": simplified_laureates}
 
     try:
         with LAUREATES_FILE.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"[Inicializando] Datos guardados en {LAUREATES_FILE}")
+            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+        print(
+            f"[Inicializando] Datos simplificados guardados en {LAUREATES_FILE} "
+            f"({len(simplified_laureates)} laureados)."
+        )
     except OSError as e:
         print(f"[Inicializando] Error al guardar {LAUREATES_FILE}: {e}")
 
+
 def load_laureates_into_memory() -> None:
     """
-    Carga el contenido de laureates.json en la variable global LAUREATES_DATA.
-    Espera un JSON con clave raíz "laureates": [..., {...}]
+    Carga el contenido de laureates.json en LAUREATES_DATA.
+    Espera un JSON con clave raíz "laureates": [..., {...}] en formato simplificado.
     """
     global LAUREATES_DATA
 
@@ -110,50 +200,27 @@ def compute_country_counts(
     yearto: Optional[int] = None,
 ) -> Dict[str, int]:
     """
-    Devuelve un diccionario {country_name_en: count} usando la misma lógica
-    de filtros que /countries.
+    Devuelve un diccionario {country_name_en: count} usando LAUREATES_DATA
     """
+
     discipline_lower = discipline.lower() if discipline is not None else None
 
     country_counts: Dict[str, int] = {}
 
     for laureate in LAUREATES_DATA:
-        # --- Obtener país en inglés del nacimiento ---
-        country_name_en = None
-        birth = laureate.get("birth")
-        if isinstance(birth, dict):
-            place = birth.get("place")
-            if isinstance(place, dict):
-                country = place.get("country")
-                # country puede ser dict {"en": "..."} o string
-                if isinstance(country, dict):
-                    country_name_en = country.get("en")
-                elif isinstance(country, str):
-                    country_name_en = country
+        country_name_en = laureate.get("birthCountry") or "Unknown"
 
-        if not country_name_en:
-            country_name_en = "Unknown"
-
-        # --- Iterar los premios Nobel de esta persona ---
         nobel_prizes = laureate.get("nobelPrizes", [])
+
         for prize in nobel_prizes:
             # Filtrar por disciplina si corresponde
             if discipline_lower is not None:
                 cat = prize.get("category")
-                if isinstance(cat, dict):
-                    cat_en = cat.get("en")
-                else:
-                    cat_en = cat
-                if not cat_en or cat_en.lower() != discipline_lower:
+                if not cat or cat.lower() != discipline_lower:
                     continue
 
-            # Año del premio
-            award_year_str = prize.get("awardYear")
-            try:
-                award_year = int(award_year_str) if award_year_str is not None else None
-            except ValueError:
-                continue
-
+            # Año del premio (ya viene como int en el JSON simplificado)
+            award_year = prize.get("awardYear")
             if award_year is None:
                 continue
 
@@ -171,7 +238,7 @@ def compute_country_counts(
             if not in_range:
                 continue
 
-            # Contabilizar el laureado para ese país
+            # Contabilizar el laureado para ese país (por premio)
             country_counts[country_name_en] = country_counts.get(country_name_en, 0) + 1
 
     return country_counts
@@ -214,43 +281,14 @@ def get_laureates(
     yearto: Optional[int] = None,
 ):
     """
-    Devuelve los laureados agrupados por año y disciplina.
+    Devuelve los laureados agrupados por año y disciplina, con filtros opcionales.
 
-    - discipline opcional:
-        * si se especifica, filtra por esa categoría (category.en, case-insensitive)
-        * si no se especifica, incluye todas las disciplinas
-    - year y yearto (opcionales):
-        * ambos presentes  -> premios entre year y yearto (inclusive)
-        * solo year        -> premios en ese año
-        * solo yearto      -> premios hasta yearto (desde el primer año disponible)
-        * ninguno          -> todos los años
+    - discipline (opcional): si se especifica, filtra por categoría (string exacto),
+      ej. "Physics", "Chemistry", "Peace", "Economic Sciences", etc.
+      Si se omite, incluye todas las disciplinas.
 
-    Formato de respuesta:
-    {
-      "discipline": "Physics" | null,
-      "year": ...,
-      "yearto": ...,
-      "total_count": N,
-      "results": [
-        {
-          "awardYear": 1975,
-          "disciplines": [
-            {
-              "discipline": "Physics",
-              "count": 3,
-              "laureates": ["Aage Niels Bohr", "...", "..."]
-            },
-            {
-              "discipline": "Chemistry",
-              "count": 2,
-              "laureates": ["...", "..."]
-            }
-          ]
-        },
-        ...
-      ]
-    }
-    """
+    - year / yearto: mismo comportamiento que en /countries.
+   """
 
     discipline_lower = discipline.lower() if discipline is not None else None
 
@@ -258,44 +296,23 @@ def get_laureates(
     year_groups: Dict[int, Dict[str, List[str]]] = {}
 
     for laureate in LAUREATES_DATA:
-        # fullName está como objeto con idiomas, ej. {"en": "A. Michael Spence", ...}
-        full_name = None
-        if isinstance(laureate.get("fullName"), dict):
-            full_name = laureate["fullName"].get("en") or next(
-                iter(laureate["fullName"].values()), None
-            )
-        elif isinstance(laureate.get("knownName"), dict):
-            full_name = laureate["knownName"].get("en") or next(
-                iter(laureate["knownName"].values()), None
-            )
-
-        if full_name is None:
-            full_name = "Nombre desconocido"
-
+        full_name = laureate.get("fullName") or "Nombre desconocido"
         nobel_prizes = laureate.get("nobelPrizes", [])
 
         for prize in nobel_prizes:
-            # categoría
+            # Categoría simple (string)
             cat = prize.get("category")
-            if isinstance(cat, dict):
-                cat_en = cat.get("en")
-            else:
-                cat_en = cat
-
-            if not cat_en:
+            if not cat:
                 continue
 
-            # Si se especificó disciplina, filtramos
+            cat_en = cat  # ya es string en inglés en el JSON simplificado
+
+            # Filtro de disciplina si corresponde
             if discipline_lower is not None and cat_en.lower() != discipline_lower:
                 continue
 
-            # año del premio
-            award_year_str = prize.get("awardYear")
-            try:
-                award_year = int(award_year_str) if award_year_str is not None else None
-            except ValueError:
-                continue
-
+            # Año del premio (int)
+            award_year = prize.get("awardYear")
             if award_year is None:
                 continue
 
@@ -314,24 +331,27 @@ def get_laureates(
                 continue
 
             # Agregamos al grupo de ese año y disciplina
-            year_groups.setdefault(award_year, {})
-            year_groups[award_year].setdefault(cat_en, []).append(full_name)
+            year_disciplines = year_groups.setdefault(award_year, {})
+            laureates_list = year_disciplines.setdefault(cat_en, [])
+            laureates_list.append(full_name)
 
-    # Armamos la lista ordenada por año
+    # Construimos la respuesta ordenada por año
     results_list = []
     total_count = 0
 
     for award_year in sorted(year_groups.keys()):
+        disciplines_dict = year_groups[award_year]
+
         disciplines_list = []
-        # Podés ordenar las disciplinas alfabéticamente si querés
-        for disc_name in sorted(year_groups[award_year].keys()):
-            laureate_names = year_groups[award_year][disc_name]
-            count = len(laureate_names)
+        for disc_name in sorted(disciplines_dict.keys()):
+            names = disciplines_dict[disc_name]
+            count = len(names)
             total_count += count
+
             disciplines_list.append({
                 "discipline": disc_name,
                 "count": count,
-                "laureates": laureate_names,
+                "laureates": names,
             })
 
         results_list.append({
@@ -340,7 +360,7 @@ def get_laureates(
         })
 
     return {
-        "discipline": discipline,  # puede ser None si no se filtró
+        "discipline": discipline,
         "year": year,
         "yearto": yearto,
         "total_count": total_count,
@@ -356,7 +376,6 @@ def get_countries(
 ):
     """
     Devuelve la cantidad de laureados por país, con filtros opcionales.
-    (Misma lógica que ya tenías, ahora apoyada en compute_country_counts).
     """
 
     country_counts = compute_country_counts(discipline, year, yearto)
@@ -409,7 +428,6 @@ def get_countries_map(
     )
 
     # Cargamos mapa mundial desde el dataset de GeoPandas
-    # (esto te funciona porque hiciste downgrade de versión)
     world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
 
     # Hacemos merge por nombre
@@ -429,7 +447,6 @@ def get_countries_map(
     # Definimos normalizador logarítmico solo si hay algún valor > 0
     max_count = merged["count"].max()
     if max_count <= 0:
-        # Caso borde: todo es 0 (muy raro, pero por las dudas)
         raise HTTPException(
             status_code=500,
             detail="No se pudieron calcular valores positivos para el mapa.",
@@ -447,15 +464,14 @@ def get_countries_map(
         norm=norm,
         linewidth=0.4,
         edgecolor="black",
-        missing_kwds={  # para geometrías donde count_plot es NaN
+        missing_kwds={
             "color": "lightgrey",
             "edgecolor": "black",
-            "hatch": "///",
+            #"hatch": "///",
         },
     )
     ax.set_axis_off()
 
-    # Título prolijo
     title_parts = ["Premios Nobel por país"]
     if discipline:
         title_parts.append(f"– {discipline}")
