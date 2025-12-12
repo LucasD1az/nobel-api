@@ -3,7 +3,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 import requests
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from pathlib import Path
 
@@ -13,9 +13,11 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Ruta al servidor de la API Nobel
-# Cambiá esto a la IP real del servidor cuando lo tengas en otro host.
+# Ruta al servidor de la API Nobel (server.py)
 API_SERVER_BASE_URL = "http://127.0.0.1:8000"
+
+# Credenciales para Basic Auth en operaciones protegidas
+API_AUTH = ("admin", "nobel2025")  # las mismas que configuraste en el server
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -47,7 +49,6 @@ async def index(request: Request):
     )
 
 
-
 # =========================
 # Procesar formulario (POST)
 # =========================
@@ -55,10 +56,10 @@ async def index(request: Request):
 @app.post("/query", response_class=HTMLResponse)
 async def query_api(
     request: Request,
-    endpoint_type: str = Form(...),       # "laureates" o "countries"
-    discipline: Optional[str] = Form(None),
-    year: Optional[str] = Form(None),
-    yearto: Optional[str] = Form(None),
+    endpoint_type: str,       # "laureates" o "countries"
+    discipline: Optional[str],
+    year: Optional[str],
+    yearto: Optional[str],
 ):
     """
     Procesa el formulario HTML:
@@ -101,7 +102,7 @@ async def query_api(
     try:
         resp = requests.get(api_url, params=params, timeout=10)
         status_code = resp.status_code
-        api_full_url = str(resp.url) 
+        api_full_url = str(resp.url)
 
         if resp.headers.get("content-type", "").startswith("application/json"):
             data = resp.json()
@@ -124,5 +125,225 @@ async def query_api(
             "status_code": status_code,
             "error": error,
             "data": data,
+        },
+    )
+
+
+# =====================================================
+# SECCIÓN ADMIN (POST / PUT / DELETE)
+# =====================================================
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_index(request: Request):
+    """
+    Página de administración:
+    - Crear laureado nuevo
+    - Buscar laureados por nombre para actualizar/borrar
+    """
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "error": None,
+            "created": None,
+            "search_results": None,
+            "updated": None,
+            "deleted": None,
+        },
+    )
+
+
+@app.post("/admin/create", response_class=HTMLResponse)
+async def admin_create(
+    request: Request,
+    fullName: str,
+    gender: str,
+    birthDate: str,
+    birthCity: str,
+    birthCountry: str,
+    awardYear: int,
+    category: str,
+    motivation: str,
+):
+    """
+    Llama al servidor: POST /laureates
+    para crear un nuevo laureado.
+    """
+    payload = {
+        "fullName": fullName,
+        "gender": gender,
+        "birthDate": birthDate,
+        "birthCity": birthCity,
+        "birthCountry": birthCountry,
+        "nobelPrizes": [
+            {
+                "awardYear": awardYear,
+                "category": category,
+                "motivation": motivation,
+            }
+        ],
+    }
+
+    error = None
+    created = None
+
+    try:
+        resp = requests.post(
+            f"{API_SERVER_BASE_URL}/laureates",
+            json=payload,
+            auth=API_AUTH,
+            timeout=10,
+        )
+        if resp.status_code not in (200, 201):
+            error = f"Error al crear laureado: {resp.status_code} – {resp.text}"
+        else:
+            data = resp.json()
+            created = data.get("laureate")
+    except requests.RequestException as e:
+        error = f"Error al conectar con el servidor: {e}"
+
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "error": error,
+            "created": created,
+            "search_results": None,
+            "updated": None,
+            "deleted": None,
+        },
+    )
+
+
+@app.post("/admin/search", response_class=HTMLResponse)
+async def admin_search(
+    request: Request,
+    search_name: str = Form(...),
+):
+    """
+    Llama al servidor: GET /laureates/search?name=...
+    para listar posibles laureados y poder editarlos/borrarlos.
+    """
+    error = None
+    search_results: Optional[List[Dict[str, Any]]] = None
+
+    try:
+        resp = requests.get(
+            f"{API_SERVER_BASE_URL}/laureates/search",
+            params={"name": search_name},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            error = f"Error al buscar laureados: {resp.status_code}"
+        else:
+            data = resp.json()
+            search_results = data.get("results", [])
+    except requests.RequestException as e:
+        error = f"Error al conectar con el servidor: {e}"
+
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "error": error,
+            "created": None,
+            "search_results": search_results,
+            "updated": None,
+            "deleted": None,
+        },
+    )
+
+
+@app.post("/admin/update", response_class=HTMLResponse)
+async def admin_update(
+    request: Request,
+    id: str = Form(...),
+    fullName: str = Form(""),
+    gender: str = Form(""),
+    birthDate: str = Form(""),
+    birthCity: str = Form(""),
+    birthCountry: str = Form(""),
+):
+    """
+    Llama al servidor: PUT /laureates/{id}
+    para actualizar campos básicos del laureado.
+    """
+    payload: Dict[str, Any] = {}
+    if fullName:
+        payload["fullName"] = fullName
+    if gender:
+        payload["gender"] = gender
+    if birthDate:
+        payload["birthDate"] = birthDate
+    if birthCity:
+        payload["birthCity"] = birthCity
+    if birthCountry:
+        payload["birthCountry"] = birthCountry
+
+    error = None
+    updated = None
+
+    try:
+        resp = requests.put(
+            f"{API_SERVER_BASE_URL}/laureates/{id}",
+            json=payload,
+            auth=API_AUTH,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            error = f"Error al actualizar laureado: {resp.status_code} – {resp.text}"
+        else:
+            data = resp.json()
+            updated = data.get("laureate")
+    except requests.RequestException as e:
+        error = f"Error al conectar con el servidor: {e}"
+
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "error": error,
+            "created": None,
+            "search_results": None,
+            "updated": updated,
+            "deleted": None,
+        },
+    )
+
+
+@app.post("/admin/delete", response_class=HTMLResponse)
+async def admin_delete(
+    request: Request,
+    id: str = Form(...),
+):
+    """
+    Llama al servidor: DELETE /laureates/{id}
+    para eliminar un laureado.
+    """
+    error = None
+    deleted = None
+
+    try:
+        resp = requests.delete(
+            f"{API_SERVER_BASE_URL}/laureates/{id}",
+            auth=API_AUTH,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            error = f"Error al borrar laureado: {resp.status_code} – {resp.text}"
+        else:
+            deleted = resp.json()
+    except requests.RequestException as e:
+        error = f"Error al conectar con el servidor: {e}"
+
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "error": error,
+            "created": None,
+            "search_results": None,
+            "updated": None,
+            "deleted": deleted,
         },
     )

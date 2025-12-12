@@ -3,7 +3,10 @@ from fastapi import FastAPI
 import requests
 import json
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Deque
+from collections import deque
+from datetime import datetime, timedelta
+import secrets
 
 import io
 import matplotlib.pyplot as plt
@@ -11,8 +14,10 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 from matplotlib import colors
-from fastapi.responses import StreamingResponse
-from fastapi import HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi import Depends, HTTPException, status, Request
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
 
 # =========================
 # Configuración de paths y URL
@@ -42,7 +47,7 @@ COUNTRY_NAME_MAPPING = {
     "East Timor": "Timor-Leste",
 }
 
-app = FastAPI(title="Nobel Laureates API - Etapa init")
+app = FastAPI(title="Nobel API Server")
 
 LAUREATES_DATA: List[Dict] = []
 
@@ -194,6 +199,13 @@ def load_laureates_into_memory() -> None:
     LAUREATES_DATA = data.get("laureates", [])
     print(f"[load_laureates] Cargados {len(LAUREATES_DATA)} laureados en memoria.")
 
+def save_laureates_to_file():
+    """
+    Sobrescribe data/laureates.json con el contenido actual de LAUREATES_DATA.
+    """
+    with LAUREATES_FILE.open("w", encoding="utf-8") as f:
+        json.dump({"laureates": LAUREATES_DATA}, f, ensure_ascii=False, indent=2)
+
 def compute_country_counts(
     discipline: Optional[str] = None,
     year: Optional[int] = None,
@@ -242,6 +254,115 @@ def compute_country_counts(
             country_counts[country_name_en] = country_counts.get(country_name_en, 0) + 1
 
     return country_counts
+
+def _get_next_laureate_id() -> str:
+    """
+    Genera un nuevo id numérico como string, tomando el máximo id actual + 1.
+    """
+    max_id = 0
+    for laureate in LAUREATES_DATA:
+        try:
+            cur = int(laureate.get("id", 0))
+            if cur > max_id:
+                max_id = cur
+        except (TypeError, ValueError):
+            continue
+    return str(max_id + 1)
+
+def _find_laureate_index_by_id(laureate_id: str) -> Optional[int]:
+    """
+    Devuelve el índice en LAUREATES_DATA del laureado con ese id, o None si no existe.
+    """
+    for idx, laureate in enumerate(LAUREATES_DATA):
+        if str(laureate.get("id")) == str(laureate_id):
+            return idx
+    return None
+
+# -------------------------------------------------------------------
+# AUTENTICACIÓN BASIC PARA POST / PUT / DELETE
+# -------------------------------------------------------------------
+
+security = HTTPBasic()
+
+# Base de usuarios simulada (para el TP alcanza así).
+USUARIOS: Dict[str, str] = {
+    "admin": "nobel2025",
+}
+
+
+def verificar_credenciales(
+    credenciales: HTTPBasicCredentials = Depends(security),
+) -> str:
+    """
+    Valida usuario/contraseña enviados por el cliente usando Basic Auth.
+
+    - El navegador / cliente arma el header:
+      Authorization: Basic base64("usuario:password")
+    - FastAPI lo decodifica y nos da `credenciales.username` y `credenciales.password`.
+    - Comparamos contra nuestro diccionario USUARIOS.
+    """
+    pwd_correcta = USUARIOS.get(credenciales.username)
+
+    if not pwd_correcta or not secrets.compare_digest(
+        credenciales.password, pwd_correcta
+    ):
+        # 401 + cabecera WWW-Authenticate para que el cliente sepa que tiene que mandar credenciales.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales incorrectas",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    return credenciales.username
+
+# -------------------------------------------------------------------
+# RATE LIMITING: límite de solicitudes por segundo para métodos que modifican datos
+# -------------------------------------------------------------------
+
+VENTANA = timedelta(seconds=1)   # ventana de tiempo
+MAX_PETICIONES = 5              # por IP, por segundo (ajustá si querés)
+
+cubos_ip: Dict[str, Deque[datetime]] = {}
+
+
+@app.middleware("http")
+async def limitador(request: Request, call_next):
+    """
+    Middleware de rate limiting:
+    - Solo limita métodos de escritura: POST, PUT, DELETE.
+    - Máximo MAX_WRITE_REQUESTS por segundo y por IP.
+    """
+    metodo = request.method.upper()
+
+    # Solo aplicamos límite a métodos "peligrosos"
+    if metodo in ("POST", "PUT", "DELETE"):
+        ip = request.client.host
+        ahora = datetime.utcnow()
+
+        cubo = cubos_ip.setdefault(ip, deque())
+
+        # Limpiamos timestamps fuera de la ventana
+        while cubo and (ahora - cubo[0]) > VENTANA:
+            cubo.popleft()
+
+        # Si se excede el límite, devolvemos 429 *sin* lanzar excepción
+        if len(cubo) >= MAX_PETICIONES:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "detail": (
+                        "Demasiadas solicitudes de modificación: "
+                        f"máximo {MAX_PETICIONES} req/s"
+                    )
+                },
+            )
+
+        # Registramos esta nueva solicitud
+        cubo.append(ahora)
+
+    # Si no se supera el límite, continuamos normal
+    response = await call_next(request)
+    return response
 
 @app.on_event("startup")
 def on_startup():
@@ -490,3 +611,187 @@ def get_countries_map(
     buf.seek(0)
 
     return StreamingResponse(buf, media_type="image/png")
+
+@app.get("/laureates/search")
+def search_laureates(name: str):
+    """
+    Búsqueda simple por nombre (match parcial, case-insensitive).
+    Sirve para que el cliente encuentre un laureado antes de editar/borrar.
+
+    Ejemplo:
+      GET /laureates/search?name=einstein
+    """
+    name_lower = name.lower()
+    results = []
+
+    for laureate in LAUREATES_DATA:
+        full_name = laureate.get("fullName", "")
+        if name_lower in full_name.lower():
+            results.append(laureate)
+
+    return {
+        "query": name,
+        "count": len(results),
+        "results": results,
+    }
+
+@app.post("/laureates")
+def create_laureate(
+    payload: dict,
+    usuario: str = Depends(verificar_credenciales),
+):
+    """
+    Crea un nuevo laureado.
+
+    Campos esperados en `payload`:
+    - fullName (str)
+    - gender (str)
+    - birthDate (str, ej. "1970-01-01")
+    - birthCity (str)
+    - birthCountry (str)
+    - nobelPrizes: lista de objetos con:
+        * awardYear (int o str convertible a int)
+        * category (str, ej. "Physics")
+        * motivation (str)
+    """
+
+    required_fields = ["fullName", "gender", "birthDate", "birthCity", "birthCountry", "nobelPrizes"]
+    for field in required_fields:
+        if field not in payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Falta el campo obligatorio '{field}'",
+            )
+
+    # Validamos y normalizamos los premios
+    cleaned_prizes = []
+    if not isinstance(payload["nobelPrizes"], list) or len(payload["nobelPrizes"]) == 0:
+        raise HTTPException(status_code=400, detail="nobelPrizes debe ser una lista no vacía")
+
+    for prize in payload["nobelPrizes"]:
+        if not isinstance(prize, dict):
+            raise HTTPException(status_code=400, detail="Cada premio debe ser un objeto JSON")
+
+        try:
+            year = int(prize["awardYear"])
+        except (KeyError, ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Cada premio debe tener 'awardYear' numérico")
+
+        category = prize.get("category")
+        motivation = prize.get("motivation")
+        if not category or not motivation:
+            raise HTTPException(
+                status_code=400,
+                detail="Cada premio debe tener 'category' y 'motivation'",
+            )
+
+        cleaned_prizes.append(
+            {
+                "awardYear": year,
+                "category": str(category),
+                "motivation": str(motivation),
+            }
+        )
+
+    nuevo_laureado = {
+        "id": _get_next_laureate_id(),
+        "fullName": str(payload["fullName"]),
+        "gender": str(payload["gender"]),
+        "birthDate": str(payload["birthDate"]),
+        "birthCity": str(payload["birthCity"]),
+        "birthCountry": str(payload["birthCountry"]),
+        "nobelPrizes": cleaned_prizes,
+    }
+
+    LAUREATES_DATA.append(nuevo_laureado)
+    save_laureates_to_file()
+
+    return {
+        "msg": f"Laureado creado por {usuario}",
+        "laureate": nuevo_laureado,
+    }
+
+@app.put("/laureates/{laureate_id}")
+def update_laureate(
+    laureate_id: str,
+    payload: dict,
+    usuario: str = Depends(verificar_credenciales),
+):
+    """
+    Actualiza un laureado existente. Se puede mandar un subconjunto de campos.
+    Si viene `nobelPrizes`, se reemplaza la lista completa por la nueva.
+    """
+
+    idx = _find_laureate_index_by_id(laureate_id)
+    if idx is None:
+        raise HTTPException(status_code=404, detail="Laureado no encontrado")
+
+    laureate = LAUREATES_DATA[idx]
+
+    # Campos simples
+    for field in ["fullName", "gender", "birthDate", "birthCity", "birthCountry"]:
+        if field in payload and payload[field] is not None:
+            laureate[field] = str(payload[field])
+
+    # Si nos mandan nueva lista de premios, la validamos igual que en el POST
+    if "nobelPrizes" in payload and payload["nobelPrizes"] is not None:
+        if not isinstance(payload["nobelPrizes"], list) or len(payload["nobelPrizes"]) == 0:
+            raise HTTPException(status_code=400, detail="nobelPrizes debe ser una lista no vacía")
+
+        cleaned_prizes = []
+        for prize in payload["nobelPrizes"]:
+            if not isinstance(prize, dict):
+                raise HTTPException(status_code=400, detail="Cada premio debe ser un objeto JSON")
+
+            try:
+                year = int(prize["awardYear"])
+            except (KeyError, ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Cada premio debe tener 'awardYear' numérico")
+
+            category = prize.get("category")
+            motivation = prize.get("motivation")
+            if not category or not motivation:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cada premio debe tener 'category' y 'motivation'",
+                )
+
+            cleaned_prizes.append(
+                {
+                    "awardYear": year,
+                    "category": str(category),
+                    "motivation": str(motivation),
+                }
+            )
+
+        laureate["nobelPrizes"] = cleaned_prizes
+
+    LAUREATES_DATA[idx] = laureate
+    save_laureates_to_file()
+
+    return {
+        "msg": f"Laureado actualizado por {usuario}",
+        "laureate": laureate,
+    }
+
+@app.delete("/laureates/{laureate_id}")
+def delete_laureate(
+    laureate_id: str,
+    usuario: str = Depends(verificar_credenciales),
+):
+    """
+    Elimina un laureado por id.
+    """
+
+    idx = _find_laureate_index_by_id(laureate_id)
+    if idx is None:
+        raise HTTPException(status_code=404, detail="Laureado no encontrado")
+
+    eliminado = LAUREATES_DATA.pop(idx)
+    save_laureates_to_file()
+
+    return {
+        "msg": f"Laureado eliminado por {usuario}",
+        "id": laureate_id,
+        "fullName": eliminado.get("fullName"),
+    }
