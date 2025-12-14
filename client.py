@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent
 API_SERVER_BASE_URL = "http://127.0.0.1:8000"
 
 # Credenciales para Basic Auth en operaciones protegidas
-API_AUTH = ("admin", "nobel2025")  # las mismas que configuraste en el server
+API_AUTH = ("admin", "nobel2025") 
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 

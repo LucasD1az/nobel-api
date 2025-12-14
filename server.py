@@ -184,7 +184,7 @@ def load_laureates_into_memory() -> None:
     global LAUREATES_DATA
 
     if not LAUREATES_FILE.exists():
-        print(f"[load_laureates] No existe {LAUREATES_FILE}. LAUREATES_DATA quedará vacío.")
+        print(f"[Cargando laureados] No existe {LAUREATES_FILE}. LAUREATES_DATA quedará vacío.")
         LAUREATES_DATA = []
         return
 
@@ -192,12 +192,12 @@ def load_laureates_into_memory() -> None:
         with LAUREATES_FILE.open(encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
-        print(f"[load_laureates] Error al leer {LAUREATES_FILE}: {e}")
+        print(f"[Cargando laureados] Error al leer {LAUREATES_FILE}: {e}")
         LAUREATES_DATA = []
         return
 
     LAUREATES_DATA = data.get("laureates", [])
-    print(f"[load_laureates] Cargados {len(LAUREATES_DATA)} laureados en memoria.")
+    print(f"[Cargando laureados] Cargados {len(LAUREATES_DATA)} laureados en memoria.")
 
 def save_laureates_to_file():
     """
@@ -284,7 +284,7 @@ def _find_laureate_index_by_id(laureate_id: str) -> Optional[int]:
 
 security = HTTPBasic()
 
-# Base de usuarios simulada (para el TP alcanza así).
+# Base de usuarios administradores
 USUARIOS: Dict[str, str] = {
     "admin": "nobel2025",
 }
@@ -320,7 +320,7 @@ def verificar_credenciales(
 # -------------------------------------------------------------------
 
 VENTANA = timedelta(seconds=1)   # ventana de tiempo
-MAX_PETICIONES = 5              # por IP, por segundo (ajustá si querés)
+MAX_PETICIONES = 5              # por IP, por segundo
 
 cubos_ip: Dict[str, Deque[datetime]] = {}
 
@@ -345,7 +345,7 @@ async def limitador(request: Request, call_next):
         while cubo and (ahora - cubo[0]) > VENTANA:
             cubo.popleft()
 
-        # Si se excede el límite, devolvemos 429 *sin* lanzar excepción
+        # Si se excede el límite, devolvemos 429
         if len(cubo) >= MAX_PETICIONES:
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -426,10 +426,8 @@ def get_laureates(
             if not cat:
                 continue
 
-            cat_en = cat  # ya es string en inglés en el JSON simplificado
-
             # Filtro de disciplina si corresponde
-            if discipline_lower is not None and cat_en.lower() != discipline_lower:
+            if discipline_lower is not None and cat.lower() != discipline_lower:
                 continue
 
             # Año del premio (int)
@@ -453,7 +451,7 @@ def get_laureates(
 
             # Agregamos al grupo de ese año y disciplina
             year_disciplines = year_groups.setdefault(award_year, {})
-            laureates_list = year_disciplines.setdefault(cat_en, [])
+            laureates_list = year_disciplines.setdefault(cat, [])
             laureates_list.append(full_name)
 
     # Construimos la respuesta ordenada por año
@@ -559,7 +557,7 @@ def get_countries_map(
         right_on="country_normalized",
     )
 
-    # 'count' puede tener NaN (no hay Nobel) → los convertimos a 0 para stats
+    # Convertimos a 0 los count que sean NaN
     merged["count"] = merged["count"].fillna(0)
 
     # Columna para ploteo: los 0 los ponemos como NaN para que se dibujen con el color de "missing"
@@ -588,7 +586,6 @@ def get_countries_map(
         missing_kwds={
             "color": "lightgrey",
             "edgecolor": "black",
-            #"hatch": "///",
         },
     )
     ax.set_axis_off()
