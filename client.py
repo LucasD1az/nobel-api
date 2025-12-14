@@ -56,10 +56,10 @@ async def index(request: Request):
 @app.post("/query", response_class=HTMLResponse)
 async def query_api(
     request: Request,
-    endpoint_type: str,       # "laureates" o "countries"
-    discipline: Optional[str],
-    year: Optional[str],
-    yearto: Optional[str],
+    endpoint_type: str = Form(...),
+    discipline: Optional[str] = Form(None),
+    year: Optional[str] = Form(None),
+    yearto: Optional[str] = Form(None),
 ):
     """
     Procesa el formulario HTML:
@@ -156,14 +156,14 @@ async def admin_index(request: Request):
 @app.post("/admin/create", response_class=HTMLResponse)
 async def admin_create(
     request: Request,
-    fullName: str,
-    gender: str,
-    birthDate: str,
-    birthCity: str,
-    birthCountry: str,
-    awardYear: int,
-    category: str,
-    motivation: str,
+    fullName: str = Form(...),
+    gender: str = Form("unknown"),
+    birthDate: str = Form(""),
+    birthCity: str = Form(""),
+    birthCountry: str = Form(""),
+    awardYear: int = Form(...),
+    category: str = Form(...),
+    motivation: str = Form(...),
 ):
     """
     Llama al servidor: POST /laureates
