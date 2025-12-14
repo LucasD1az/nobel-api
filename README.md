@@ -18,25 +18,86 @@ nobel-api/
 
 El archivo `data/laureates.json` no se versiona en git (está en `.gitignore`). Si no existe, el propio servidor lo descarga automáticamente desde la API oficial de Nobel.
 
-## Dependencias
+## Instalación del proyecto y creación del entorno virtual
 
-Python 3.10+ (recomendado)
+Antes de instalar las dependencias, es necesario crear y activar un entorno virtual.  
+A continuación se detalla el procedimiento tanto para Linux como para Windows.
 
-Librerías Python:
-* fastapi
-* uvicorn
-* requests
+### Crear entorno virtual e instalar dependencias en Linux (Ubuntu / Debian)
 
-## Instalación rápida:
+Instalar `venv`:
 
 ```bash
-pip install fastapi uvicorn requests
+sudo apt install python3-venv -y
+python3 -m venv .venv
+```
+
+Desde la carpeta del proyecto:
+
+```bash
+python3 -m venv .venv
+````
+
+Activar el entorno virtual:
+
+```bash
+source .venv/bin/activate
+```
+
+Instalar dependencias del sistema necesarias para GeoPandas:
+
+```bash
+sudo apt install -y gdal-bin libgdal-dev libspatialindex-dev
+```
+
+Instalar las dependencias del proyecto:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### Crear entorno virtual e instalar dependencias en Windows
+
+Desde la carpeta del proyecto, crear el entorno virtual:
+
+```bash
+python -m venv .venv
+```
+
+o, según la instalación:
+
+```bash
+py -3 -m venv .venv
+```
+
+Activar el entorno virtual:
+
+Usando PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+O usando CMD:
+
+```cmd
+.venv\Scripts\activate.bat
+```
+
+Instalar dependencias desde `requirements.txt`:
+
+```bash
+pip install -r requirements.txt
 ```
 
 ## Cómo levantar el servidor
-Desde la carpeta del proyecto (donde está server.py):
+Desde la carpeta del proyecto (donde está server.py) y en la misma terminal en la que activamos nuestro entorno virtual:
+
 ```bash
-uvicorn server:app --host 0.0.0.0 --port 8000
+uvicorn server:app --host 0.0.0.0 --port 8000 &
+
 ```
 
 Al iniciar, el servidor:
@@ -47,6 +108,13 @@ Al iniciar, el servidor:
 https://api.nobelprize.org/2.1/laureates?offset=0&limit=1025
 ```
 3. Carga el contenido de `laureates.json` en memoria (`LAUREATES_DATA`).
+
+## Cómo levantar el cliente
+En la misma terminal donde levantamos el servidor:
+
+```bash
+uvicorn client:app --host 0.0.0.0 --port 8001 &
+```
 
 ## Endpoints implementados hasta ahora
 ### `GET /`

@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+matplotlib
+"geopandas<=1.0"
+jinja2
+python-multipart
